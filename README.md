@@ -78,8 +78,8 @@ GPL-3.0으로 공개합니다(LICENSE). 구성:
 
 1. `build.bat` → `bin\dinput8.dll`
 2. 캐릭터 데이터 만들기:
-   `set T7TT_TKDATA=<철권 7 폴더>\TekkenGame\Content\Binary	kdata.bin` 후 `python toolsuild_partner.py bin\T7Tag_partners`
-3. `build_tests.bat` → `bin	ag_harness.exe` (2번 데이터 필요)
+   `set T7TT_TKDATA=<철권 7 폴더>\TekkenGame\Content\Binary\tkdata.bin` 후 `python tools\build_partner.py bin\T7Tag_partners`
+3. `build_tests.bat` → `bin\tag_harness.exe` (2번 데이터 필요)
 4. 런처 실행: `python launcher\T7TT.pyw`
 
 게임 데이터를 여는 데 필요한 값은 이 저장소에 없습니다. 실행할 때 설치된 게임에서 읽습니다.
