@@ -1,4 +1,4 @@
-# T7TT: 철권 7을 태그 토너먼트 2처럼 (테스트 버전 0.1)
+# T7TT: 철권 7을 태그 토너먼트 2처럼 (테스트 버전 0.1.1)
 
 철권 7(Steam)에서 캐릭터 두 명을 골라 태그, 태그 콤보, 태그 어썰트를 쓸 수 있게 하는 **오프라인 전용** 비공식 모드입니다.
 목표는 "태그 2 해 본 사람이 어색하지 않은 태그"입니다. 태그 2를 잘 아시는 분의 피드백을 받고 싶습니다.
@@ -7,7 +7,7 @@
 
 ## 설치
 
-1. [Releases](../../releases)에서 `T7TT_v0.1.zip`을 받아 압축을 풉니다.
+1. [Releases](../../releases)에서 `T7TT_v0.1.1.zip`을 받아 압축을 풉니다.
 2. `T7TT.exe`를 실행하고 **설치 / 적용**을 누릅니다.
    처음 한 번 캐릭터 데이터를 만듭니다. 1분 정도 걸리고 약 550MB를 씁니다.
 3. **게임 실행**을 누릅니다.
@@ -64,6 +64,25 @@ zip에는 F8 기록(기술 이름, 위치, 누른 키), 모드 로그, 모드 �
 - 파트너 커스텀의 안경·무기 같은 소품은 아직 안 보입니다.
 - 데빌 진과 헤이하치 위주로 확인했습니다. 다른 캐릭터, P2 쪽 태그 팀, 대전 모드는 확인이 부족합니다.
 - 온라인에서는 꺼집니다. 온라인에서 쓰지 마세요.
+
+## 소스와 직접 빌드
+
+GPL-3.0으로 공개합니다(LICENSE). 구성:
+
+- `src/` 게임에 들어가는 모드 본체 (`dinput8.dll`)
+- `launcher/` 런처
+- `tools/` 설치된 게임에서 태그용 캐릭터 데이터를 만드는 코드
+- `tests/` 오프라인 테스트
+
+빌드 순서 (Windows, Visual Studio Build Tools, Python 3 + pycryptodome):
+
+1. `build.bat` → `bin\dinput8.dll`
+2. 캐릭터 데이터 만들기:
+   `set T7TT_TKDATA=<철권 7 폴더>\TekkenGame\Content\Binary	kdata.bin` 후 `python toolsuild_partner.py bin\T7Tag_partners`
+3. `build_tests.bat` → `bin	ag_harness.exe` (2번 데이터 필요)
+4. 런처 실행: `python launcher\T7TT.pyw`
+
+게임 데이터를 여는 데 필요한 값은 이 저장소에 없습니다. 실행할 때 설치된 게임에서 읽습니다.
 
 ## 참고
 
