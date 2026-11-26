@@ -186,7 +186,10 @@ bool Confirmish(int vk) {
     return true;
 }
 
-void ToMode(int s) { g_sel.phase[s] = PH_MODE; g_sel.armed[s] = false; g_sel.firstId[s] = -1; g_sel.partnerId[s] = -1; g_sel.mainSlot[s] = -1; }
+void ToMode(int s) {
+    g_sel.phase[s] = PH_MODE; g_sel.armed[s] = false; g_sel.firstId[s] = -1; g_sel.partnerId[s] = -1; g_sel.mainSlot[s] = -1;
+    g_sel.mainBoss[s] = -1; g_sel.partnerBoss[s] = false; g_sel.bossHover[s] = -1;
+}
 
 // 11-23 costume slots (user: "the skin key just moves on"). The game's costume list (Default 1-4, Preset 1.., then the
 // player's own), measured on the select object (P2 +0x440): byte +0x503 = 1 while the list is open, +0x4CC = its
@@ -196,6 +199,23 @@ constexpr uintptr_t kListOpen = 0x503, kListPos = 0x4CC, kListTotal = 0x4D8, kSi
 bool ListOpen(int s) { uintptr_t o = SelObj(); uint8_t v = 0; if (o) Rd(o + kListOpen + kSideStride * s, v); return o && v != 0; }
 int ListCursor(int s) { uintptr_t o = SelObj(); int v = -1; if (o) Rd(o + kListPos + kSideStride * s, v); return v; }
 bool CostumeKey(int vk) { return vk == 'U' || vk == 'I'; }   // the game's "customize slot" button on keyboards
+
+// 11-26 O (pad Y) on a character that has a boss version: switch it on / off for this pick
+bool BossToggle(int s) {
+    uintptr_t o = SelObj();
+    int id = 255;
+    if (o) Rd(o + 0x508 + 0x440 * s, id);
+    const wchar_t* boss = id >= 0 && id <= 60 ? BossName(id) : nullptr;
+    if (!boss) { OverlayToast(L"이 캐릭터는 보스판이 없습니다", 1500); return true; }
+    bool on = g_sel.bossHover[s] != id;
+    g_sel.bossHover[s] = on ? id : -1;
+    wchar_t msg[96];
+    swprintf_s(msg, L"%s %s", boss, on ? L"켜짐 (O로 끄기)" : L"꺼짐");
+    OverlayToast(msg, 2500);
+    UiSound("SE_cmn_Mainmenu_Cursor|SE_Cursor|Cursor_Menu_01");
+    Log("select: P%d boss version of %d %s", s + 1, id, on ? "ON" : "off");
+    return true;
+}
 
 // one key going down on the select screen: returns true = hide it from the game (state already changed)
 bool OnKey(int vk) {
@@ -222,6 +242,7 @@ bool OnKey(int vk) {
         if (list && (esc || IsDir(vk))) return false;          // the game's slot list: move / close it
         if (list && vk != VK_RETURN) return false;             // its other buttons (pages ...) too
         if (!list && CostumeKey(vk)) return false;             // opens the slot list for the main's costume
+        if (!list && vk == 'O') return BossToggle(s);
         if (esc) { ToMode(s); Log("select: P%d back to TAG/SOLO", s + 1); return true; }
         if (Confirmish(vk)) {
             // the cursor's cell: column +0x4B0, row +0x4B4 (P2 +0x440). Row 1 = top = locked characters here (row 2
@@ -235,6 +256,7 @@ bool OnKey(int vk) {
             if (row == 1) { Log("select: P%d main pick on a locked cell (col %d): ignored", s + 1, col); return false; }
             if (id < 0 || id > 60) { Log("select: P%d main pick: cursor unknown (%d)", s + 1, id); return true; }
             g_sel.firstId[s] = id; g_sel.partnerId[s] = -1; g_sel.armed[s] = true; g_sel.phase[s] = PH_PARTNER;
+            g_sel.mainBoss[s] = g_sel.bossHover[s] == id ? id : -1; g_sel.bossHover[s] = -1; g_sel.partnerBoss[s] = false;
             g_sel.mainCol[s] = col; g_sel.mainRow[s] = row;
             UiSound("SE_cmn_Mainmenu_Decide|SE_Decide|SE_Decide2|Decide_Menu_01");   // the game's confirm sound (Wwise)
             Log("select: P%d MAIN = %d (%s), the press stays hidden; now the partner", s + 1, id, CharName(id) ? CharName(id) : "?");
@@ -254,10 +276,12 @@ bool OnKey(int vk) {
     }
     case PH_PARTNER:
         if (esc && ListOpen(s)) return false;                  // closes the slot list, keeps the main pick
+        if (vk == 'O' && !ListOpen(s)) return BossToggle(s);
         if (vk == VK_RETURN) {                                 // the game's confirm: the partner's costume choice
             int id = 255;
             uintptr_t o = SelObj();
             if (o) Rd(o + 0x508 + 0x440 * s, id);
+            g_sel.partnerBoss[s] = g_sel.bossHover[s] == id;
             int pos = ListOpen(s) ? ListCursor(s) : -1;         // no list: Default 1
             g_sel.partnerSlot[s] = pos;
             if (id >= 0 && id <= 60) CostumePick(s, true, id, pos, o);
@@ -265,12 +289,13 @@ bool OnKey(int vk) {
         }
         if (esc) {
             g_sel.armed[s] = false; g_sel.firstId[s] = -1; g_sel.partnerId[s] = -1; g_sel.phase[s] = PH_MAIN;
-            g_sel.mainSlot[s] = -1;
+            g_sel.mainSlot[s] = -1; g_sel.mainBoss[s] = -1; g_sel.partnerBoss[s] = false; g_sel.bossHover[s] = -1;
             Log("select: P%d main pick taken back", s + 1);
             return true;
         }
         return false;                                      // Enter: the game's confirm -> setA -> DONE
     case PH_SOLO:
+        if (vk == 'O' && !ListOpen(s)) return BossToggle(s);
         if (esc) { ToMode(s); Log("select: P%d back to TAG/SOLO", s + 1); return true; }
         return false;
     }
@@ -318,6 +343,8 @@ void PickConfirmed(int s, int id) {
             id == g_sel.firstId[s] ? " - same as the main: plays SOLO" : "");
     } else if (ph == PH_SOLO || ph == PH_MODE || ph == PH_MAIN) {
         if (ph != PH_SOLO) Log("select: P%d confirmed by the game before TAG/SOLO was set: SOLO", s + 1);
+        g_sel.mainBoss[s] = ph == PH_SOLO && g_sel.bossHover[s] == id ? id : -1;   // 11-26 solo boss version
+        g_sel.bossHover[s] = -1;
         g_sel.armed[s] = false; g_sel.firstId[s] = -1; g_sel.phase[s] = PH_DONE;
     }
     ReleaseSRWLockExclusive(&g_lk);
@@ -329,6 +356,7 @@ void SelectReset() {
     for (int s = 0; s < 2; ++s) {
         g_sel.phase[s] = PH_NONE; g_sel.armed[s] = false; g_sel.firstId[s] = -1; g_sel.partnerId[s] = -1;
         g_sel.mainSlot[s] = -1; g_sel.partnerSlot[s] = -1; g_sel.slotDone[s] = false; CostumeClear(s);
+        g_sel.mainBoss[s] = -1; g_sel.partnerBoss[s] = false; g_sel.bossHover[s] = -1;
     }
     g_sel.done = false;
 }

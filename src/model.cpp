@@ -196,6 +196,29 @@ uintptr_t LoadSetAsset(int id, const char* suffix) {
     return At<uintptr_t>(a, 0x10);
 }
 
+}  // namespace
+// 11-26 boss versions: the story's own costume set (CS_HEI_final ...), loaded by path; 0 = none / not loadable
+uintptr_t BossSet(int id) {
+    static uintptr_t fn = 0, cdo = 0, setCls = 0;
+    if (!fn) {
+        fn = ue::Function("TekkenBlueprintLibrary", "LoadObjectFromAssetPath");
+        cdo = ue::Find("TekkenBlueprintLibrary", "/Script/TekkenGame", "Default__TekkenBlueprintLibrary");
+        setCls = ue::Find("Class", "/Script/TekkenGame", "CharacterItemSet");
+    }
+    const wchar_t* name = id == 8 ? L"CS_HEI_final" : id == 9 ? L"CS_KAZ_final" : id == 32 ? L"CS_MRX_final" : nullptr;
+    if (!fn || !cdo || !setCls || !name) return 0;
+    wchar_t path[200];
+    swprintf_s(path, L"/Game/Demo/StoryMode/Character/Sets/%s.%s", name, name);
+    FNameRaw nm;
+    if (!MakeName(path, nm)) return 0;
+    uint8_t a[24]{};
+    memcpy(a, &setCls, 8); memcpy(a + 8, &nm, 8);
+    uintptr_t set = ue::Call(cdo, fn, a) ? At<uintptr_t>(a, 0x10) : 0;
+    Log("model: boss costume %S -> %s", name, set ? ue::Name(set).c_str() : "not loaded");
+    return set;
+}
+namespace {
+
 // the animation blueprint for a mesh: SKT_CH_<x> skeleton -> /Game/Character/Common/Skeleton/AB_CH_<x>.AB_CH_<x>_C
 uintptr_t AnimClassFor(uintptr_t mesh) {
     static uintptr_t fn = 0, cdo = 0, abgc = 0;
@@ -413,6 +436,9 @@ uintptr_t MasterOf(uintptr_t comp) {
 }
 
 void Prepare(int side, int mainId, int partnerId);
+}  // namespace
+void AddBossExtras(int side, int mainId, uintptr_t actor);
+namespace {
 
 void Show(int side, int member) {
     SideModel& m = g_m[side];
@@ -641,7 +667,8 @@ void Prepare(int side, int mainId, int partnerId) {
         ++parts;
     }
     // 11-23: the partner's own costume choice, built by the game's loader (costume.cpp); else the default costume
-    m.set = g_cfg.partnerCustom ? CostumeSet(side, partnerId) : 0;
+    m.set = g_sel.partnerBoss[side] ? BossSet(partnerId) : 0;          // 11-26 boss version: its story costume
+    if (!m.set && g_cfg.partnerCustom) m.set = CostumeSet(side, partnerId);
     Log("model: P%d partner costume: %s", side + 1, m.set ? ue::Name(m.set).c_str() : "default");
     if (!m.set) m.set = LoadDefaultSet(side, partnerId);
     if (!m.set) { Log("model: P%d no costume set for character %d", side + 1, partnerId); return; }
@@ -672,6 +699,7 @@ void Prepare(int side, int mainId, int partnerId) {
     }
     m.ready = found > 0;
     if (m.ready) PrepareManagers(m, side, actor, partnerId);
+    if (m.ready) AddBossExtras(side, mainId, actor);   // 11-26 boss main: its set's wings / hair (the game leaves them out)
     if (m.ready) {                                      // the main's extra meshes (devil wings ...): hidden for the partner
         int n = ue::NumObjects();
         for (int i = 0; i < n; ++i) {
@@ -734,7 +762,8 @@ void ModelSpawnDouble(int side, int playerNumber) {
             comps.push_back(o);
         }
         int mainId = g_m[side].ids[0];
-        uintptr_t set = LoadDefaultSet(side, mainId, side + 1);
+        uintptr_t set = g_sel.mainBoss[side] == mainId ? BossSet(mainId) : 0;
+        if (!set) set = LoadDefaultSet(side, mainId, side + 1);
         static uintptr_t equip = ue::Function("ItemManagerComponent_C", "EquipCharacterItemSet");
         bool eq = false;
         if (imc && set && equip) { uint8_t a[16]{}; memcpy(a, &set, 8); memcpy(a + 8, &mainId, 4); eq = ue::Call(imc, equip, a); }
@@ -809,6 +838,21 @@ std::vector<uintptr_t> AddSetExtras(uintptr_t actor, uintptr_t set, uintptr_t le
 }
 
 
+// 11-26 a boss main's extra items (True Devil Kazuya's wings, story Akuma's hair): the game equips the story set without
+// them in a fight, so they are added like the partner's, once per fighter actor
+void AddBossExtras(int side, int mainId, uintptr_t actor) {
+    static uintptr_t done[2] = {};
+    if (side < 0 || side > 1 || g_sel.mainBoss[side] != mainId || done[side] == actor) return;
+    uintptr_t set = BossSet(mainId);
+    if (!set) return;
+    ue::SetRoot(set, true);
+    uintptr_t body = 0;
+    for (int p : {2, 3}) { uint8_t a[16]{}; a[0] = (uint8_t)p; if (!body && ue::Call(actor, F.getComp, a)) body = At<uintptr_t>(a, 8); }
+    std::vector<uintptr_t> parts = AddSetExtras(actor, set, body);
+    done[side] = actor;
+    Log("model: P%d boss main extra parts: %d", side + 1, (int)parts.size());
+}
+
 // 11-23 doll (doll.cpp): a second actor of the main's class, dressed as the leaving member (meshes, anim blueprints,
 // the main's material overrides / the partner's colours), PlayerNumber 2 = its pose comes from the spare motion block.
 // Spawned on first use, then only shown / hidden. Game thread.
@@ -876,7 +920,8 @@ bool ModelDoll(int side, int member, bool show) {
         uintptr_t body = m.dollComp[2] ? m.dollComp[2] : m.dollComp[3];
         if (!m.dollExtrasTried[member]) {
             m.dollExtrasTried[member] = true;
-            uintptr_t set = member == 1 ? m.set : LoadDefaultSet(side, m.ids[0]);
+            uintptr_t set = member == 1 ? m.set : g_sel.mainBoss[side] == m.ids[0] ? BossSet(m.ids[0]) : 0;
+            if (!set) set = LoadDefaultSet(side, m.ids[0]);
             m.dollExtras[member] = AddSetExtras(m.doll, set, body);
             Log("doll: P%d member %d extra parts: %d (set %s)", side + 1, member, (int)m.dollExtras[member].size(), ue::Name(set).c_str());
         }
@@ -910,6 +955,16 @@ void ModelPrepare(int side, int mainId, int partnerId, int oppId) {
     if (side >= 0 && side < 2) { g_oppModel[side] = oppId; }
     if (!ModelAvailable()) return;
     ue::RunOnGameThread([=] { Prepare(side, mainId, partnerId); });
+}
+
+void ModelBossSolo(int side, int mainId) {
+    if (!ModelAvailable() || side < 0 || side > 1) return;
+    ue::RunOnGameThread([=] {
+        if (!Resolve()) return;
+        uintptr_t cm = ue::Instance("BP_CharacterManager_C");
+        uintptr_t actor = cm ? ActorFor(cm, side) : 0;
+        if (actor) AddBossExtras(side, mainId, actor);
+    });
 }
 
 void ModelShow(int side, int member) {

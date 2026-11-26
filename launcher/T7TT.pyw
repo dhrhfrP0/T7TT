@@ -137,7 +137,8 @@ def tag_data_ready(out_dir):
         ok = open(os.path.join(out_dir, "version.txt")).read().strip() == str(build_partner.VERSION)
     except OSError:
         return False
-    return ok and os.path.exists(os.path.join(out_dir, "common.bin"))
+    # 0.2: boss versions (hei_fb ...) are new files next to the characters: an older install builds again
+    return ok and os.path.exists(os.path.join(out_dir, "common.bin")) and         all(os.path.exists(os.path.join(out_dir, v + ".t7p")) for v in build_partner.VARIANTS)
 
 
 def build_tag_data(out_dir, progress=None):
@@ -154,7 +155,7 @@ def build_tag_data(out_dir, progress=None):
     def log(_line):
         done[0] += 1
         if progress:
-            progress(done[0], len(codes))
+            progress(done[0], len(codes) + len(build_partner.VARIANTS))
     build_partner.build_all(out_dir, codes, log=log)
 
 

@@ -37,6 +37,8 @@ void ModelHudIcon(int, int) {}
 bool ModelHudIconShows(int, int) { return false; }
 void ModelHudIconRestore(int, int) {}
 void ModelForget(int) {}
+void ModelBossSolo(int, int) {}
+uintptr_t BossSet(int) { return 0; }
 void UiSound(const char*) {}
 void BattleSound(int, const std::string&) {}
 void OverlayToast(const wchar_t*, int) {}

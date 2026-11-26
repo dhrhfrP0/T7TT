@@ -188,7 +188,15 @@ struct SelectState {
     volatile int partnerSlot[2] = {-1, -1};
     volatile bool slotDone[2] = {false, false};
     volatile int mainTotal[2] = {0, 0}, partnerTotal[2] = {0, 0};   // list sizes (custom = the last 10)
+    volatile int bossHover[2] = {-1, -1};     // 11-26 boss version switched on (O / pad Y) for this character id
+    volatile int mainBoss[2] = {-1, -1};      // character id of the main / solo pick played as its boss version
+    volatile bool partnerBoss[2] = {false, false};
 };
+// 11-26 boss versions (story moves, versus damage): character id -> its .t7p key and shown name, nullptr = none
+constexpr int kBossKey = 1000;
+const wchar_t* BossName(int charId);
+uintptr_t BossSet(int charId);
+void ModelBossSolo(int side, int mainId);  // model.cpp: a solo boss main's extra parts (wings / hair)       // model.cpp: the boss version's story costume set (game thread)
 extern SelectState g_sel;
 bool SelectInstall();                // patch the select/load character setters
 int SelectCursorId(int side);        // hovered character id at the select screen (-1 if unknown)

@@ -133,6 +133,11 @@ void __fastcall HkHand(uintptr_t cm, uintptr_t set, int character, int player) {
         if (set) ue::SetRoot(set, true);
         return;
     }
+    // 11-26 boss version of the main: the story costume instead of the picked one
+    if (player >= 0 && player < 2 && g_sel.mainBoss[player] == character) {
+        uintptr_t boss = BossSet(character);
+        if (boss) { ue::SetRoot(boss, true); set = boss; }
+    }
     g_origHand(cm, set, character, player);
 }
 }  // namespace

@@ -151,6 +151,19 @@ bool ParseBlob(const std::vector<uint8_t>& raw, Blob& b, bool headerOnly) {
     return true;
 }
 
+}  // namespace
+
+const wchar_t* BossName(int charId) {
+    if (!g_files.count(charId + kBossKey)) return nullptr;
+    switch (charId) {
+    case 8: return L"최종전 헤이하치";
+    case 9: return L"트루 데빌 카즈야";
+    case 32: return L"스토리 고우키";
+    default: return L"보스판";
+    }
+}
+
+namespace {
 Blob* GetBlob(int charId) {
     auto it = g_blobs.find(charId);
     if (it != g_blobs.end()) return it->second.ok ? &it->second : nullptr;
@@ -227,6 +240,9 @@ void WriteEffects(uintptr_t info, const Blob& b) {
         if (c && *(uint64_t*)c == 0x8000) { *(uint32_t*)(c + 0x18) = (uint32_t)frames[k]; *(uint32_t*)(c + 0x20) = (uint32_t)frames[k]; }
         else Log("tag: %s entry %d has no lock row", b.code, k);
     }
+    // 11-26: the end row only fires when the move is over, and the raw entry is a copy of the standing move: it lasted
+    // the whole idle animation (Kazuya 1.4 s, Akuma 643 frames = 10 s, measured). Its length = the raw lock.
+    *(int32_t*)(moves + (uint64_t)(b.ret + 2) * Mi::MoveStride + 0x68) = frames[1];
 }
 
 // Copy a blob into a fresh game allocation, relocate, retarget "character id is X" checks to the player's id.
@@ -544,10 +560,13 @@ void SetupMatch(int side, uintptr_t player, uintptr_t cur) {
     int pid = armed ? g_sel.partnerId[side] : -1;
     // rematch without the select screen: same team as last time
     static int lastFirst[2] = {-1, -1}, lastPartner[2] = {-1, -1};
+    static bool lastBoss[2][2] = {};
+    bool boss[2] = {g_sel.mainBoss[side] == cid, armed && g_sel.partnerBoss[side]};
     bool reuse = !armed && !g_sel.visited[side] && lastFirst[side] == cid && lastPartner[side] >= 0;
-    if (reuse) { armed = true; pid = lastPartner[side]; }
+    if (reuse) { armed = true; pid = lastPartner[side]; boss[0] = lastBoss[side][0]; boss[1] = lastBoss[side][1]; }
     g_sel.visited[side] = false;
     lastFirst[side] = cid; lastPartner[side] = armed ? pid : -1;
+    lastBoss[side][0] = boss[0]; lastBoss[side][1] = boss[1];
     HpState h;
     s.hpOk = ReadHp(player, h);
     s.lastPct = h.pct;
@@ -557,14 +576,18 @@ void SetupMatch(int side, uintptr_t player, uintptr_t cur) {
     SetMemberName(s.m[0], cid, cur);
     bool tag = g_cfg.mode == Mode::Tag && armed && pid >= 0 && pid != cid;
     // own copy of the point character: assault/return moves and the wall-screw switch (solo sides too)
-    Blob* ob = (tag || g_cfg.wallScrew) ? GetBlob(cid) : nullptr;
+    // 11-26 boss version of the point character: its own blob even when playing solo
+    int okey = cid + (boss[0] && g_files.count(cid + kBossKey) ? kBossKey : 0);
+    Blob* ob = (tag || g_cfg.wallScrew || okey != cid) ? GetBlob(okey) : nullptr;
     if (ob && Install(*ob, cid, s.alloc[0])) {
         s.m[0].moveset = s.alloc[0]; s.m[0].assault = (int)ob->assault; s.m[0].ret = (int)ob->ret; s.m[0].entry = (int)ob->ret + 1; s.m[0].entryRaw = (int)ob->ret + 2;
-        s.blobId[0] = cid; s.wallReq[0] = ob->wallReq;
+        s.blobId[0] = okey; s.wallReq[0] = ob->wallReq;
+        if (okey != cid) strncpy_s(s.m[0].name, ob->name, _TRUNCATE);
         SetMoveset(player, s.alloc[0]);
     }
     if (!tag) {
         ModelForget(side);
+        if (okey != cid) ModelBossSolo(side, cid);
         Log("tag: P%d match setup: SOLO %s (id %d)%s hp=%d%% enc=%08X%s", side + 1, s.m[0].name, cid,
             armed ? " (tag armed but no partner picked)" : "", h.pct, h.enc,
             s.hpOk ? "" : " (health not readable)");
@@ -572,11 +595,13 @@ void SetupMatch(int side, uintptr_t player, uintptr_t cur) {
     }
     if (reuse) Log("tag: P%d rematch: same team as last time", side + 1);
     else if (g_sel.firstId[side] != cid) Log("tag: P%d warning: loaded id %d differs from first pick %d", side + 1, cid, g_sel.firstId[side]);
-    Blob* pb = GetBlob(pid);
+    int pkey = pid + (boss[1] && g_files.count(pid + kBossKey) ? kBossKey : 0);
+    Blob* pb = GetBlob(pkey);
     if (!pb || !Install(*pb, cid, s.alloc[1])) return;
     s.m[1].moveset = s.alloc[1]; s.m[1].assault = (int)pb->assault; s.m[1].ret = (int)pb->ret; s.m[1].entry = (int)pb->ret + 1; s.m[1].entryRaw = (int)pb->ret + 2;
-    s.blobId[1] = pid; s.wallReq[1] = pb->wallReq; s.m[1].id = pid;
+    s.blobId[1] = pkey; s.wallReq[1] = pb->wallReq; s.m[1].id = pid;
     SetMemberName(s.m[1], pid, s.alloc[1]);
+    if (pkey != pid) strncpy_s(s.m[1].name, pb->name, _TRUNCATE);
     s.tag = true;
     uintptr_t oppMs = 0; Rd(GamePlayer(1 - side) + Off::Motbin, oppMs);
     ModelPrepare(side, cid, pid, oppMs ? MovesetCharId(oppMs) : -1);
@@ -1061,7 +1086,9 @@ void TagInit() {
         do {
             std::vector<uint8_t> head;
             Blob b;
-            if (ReadFileAll(dir + fd.cFileName, head, 0x70) && ParseBlob(head, b, true)) g_files[b.charId] = dir + fd.cFileName;
+            // boss versions (hei_fb ...) sit next to the character's own file under id + kBossKey
+            if (ReadFileAll(dir + fd.cFileName, head, 0x70) && ParseBlob(head, b, true))
+                g_files[b.charId + (memchr(b.code, '_', sizeof(b.code)) ? kBossKey : 0)] = dir + fd.cFileName;
         } while (FindNextFileW(h, &fd));
         FindClose(h);
     }

@@ -22,6 +22,7 @@ flips that one requirement id between 614 and 901 (never) so a screw still happe
 Rules for the relocation follow T7Disk::BuildFile (TKMovesets docs).
 """
 import os
+import re
 import struct
 import sys
 import zlib
@@ -76,11 +77,108 @@ def align(n, a=16):
     return (n + a - 1) // a * a
 
 
-def build(td: Tkdata, code: str):
-    mot = bytearray(td.mot(code))
-    arc = bytearray(td.read("mothead" + chr(92) + "mask" + chr(92) + code + "rotsm.arc"))
+# ---- boss variants (11-26, user: "add 3 characters": story bosses = the normal character + their story moves, damage
+# as in versus). A story battle opens its moves with cancels whose requirements say "story battle N" (559 = N, 558/225
+# = story mode flags). The variant's copy of such a cancel gets its own requirement list without those rows, so the
+# branch is open in any mode. Scripted parts of the story fight (intros 564/569, AI resets to standing, phase changes,
+# finishers, cut-scenes) stay closed. Story moves hit as hard as the move they replace.
+STORY_FLAGS = {558, 559, 225}
+SCRIPTED = re.compile(r"sKAM|PHASE|sMOVE|fatal|ChgBreak|_FIN_|Chapter|AteN|WaitingDead|nige|Blocking|Treasure|END|"
+                      r"Png|^sDm_|^Dw_|Co_Chg|Story_|_y$|REMATCH")
+VARIANTS = {  # file code -> base character, story battles, which story moves (target names), extra rows to drop
+    # Final Battle Heihachi (story ch.14 battle 4 = 559 25): his own motions for 1,2 / 2,1 / 3,4 / 4 / b+4 / throw
+    # follow-up and the final-battle Rage Art (that one still asks for a Kazuya opponent, like the story)
+    "hei_fb": dict(base="hei", battles={25}, name="Final Battle Heihachi", targets=r"_7CS$|^He_m_p02$|_CH14BT4"),
+    # True Devil Kazuya: always in devil form (344 = 1: laser, wings, devil upper ... as the game's devil Kazuya), plus
+    # the story devil fights' moves (ch.14 battles 2-4 = 559 23-25: third-eye beam, devil 10-hit, EX moves)
+    "kaz_td": dict(base="kaz", battles={23, 24, 25}, name="True Devil Kazuya", unlock={(344, 1)},
+                   targets=r"CH14BT02$|^Kz_CH14_2_10com|^Kz_vipLP_EX_7CS$|^SKz_dslp_EX_7CS$|^Kz_ThirdEyeBeam_7CS$|"
+                           r"^Kz_m_k00Gup$|^Kz_narakudslp$"),
+    # Akuma (story ch.16 = 559 27): the story Rage Art finish; 347 (round) is dropped, the 1000 damage finish
+    # becomes the normal finish's damage
+    "mrx_16": dict(base="mrx", battles={27}, name="Akuma (Story)", targets=r"CH16", drop={347}),
+}
+STORY_NAME = re.compile(r"_?CH1\dBT\d+(_7CS)?|_?CH1\d|_7CS")
+
+
+def hit_rows(ms, i):
+    """hitCondition rows of move i (file form), the terminating row included"""
+    h = ms.u64(ms.row("move", i) + 0x60)
+    rows = []
+    while h != NONE and h < ms.count("hitCondition"):
+        rows.append(h)
+        rs = ms.requirements(ms.u64(ms.row("hitCondition", h)))
+        if not rs or rs[0][0] == 881:
+            break
+        h += 1
+    return rows
+
+
+def max_damage(ms, i):
+    return max([ms.u32(ms.row("hitCondition", h) + 8) for h in hit_rows(ms, i)] or [0])
+
+
+def plan_variant(ms, spec, log=print):
+    """-> ({(table, row): new requirement list}, {move: versus damage})"""
+    n = ms.count("move")
+    names = {ms.move_name(i): i for i in range(n)}
+    over, damage = {}, {}
+    for i in range(n):
+        src = ms.move_name(i)
+        cancels = ms.move_cancels(i)
+        for kind, c in cancels:
+            rs = ms.requirements(c["req"])
+            if c["command"] in (0x800B, 0x800C) or any(a in (564, 569) for a, _ in rs):
+                continue
+            t = ms.resolve(c["move_id"])
+            if not 0 <= t < n:
+                continue
+            tn = ms.move_name(t)
+            if SCRIPTED.search(tn) or any(a == 73 for a, _ in rs):   # 73: the computer player's own branches
+                continue
+            unlock = spec.get("unlock", set())
+            story = any(a == 559 and b in spec["battles"] for a, b in rs) and re.search(spec["targets"], tn)
+            if story:          # a story battle's move: the story rows (and the variant's state rows) go
+                drop = STORY_FLAGS | spec.get("drop", set())
+                own = [r for r in rs if r[0] not in drop and r not in unlock]
+            elif unlock & set(rs) and not any(a == 559 for a, _ in rs):
+                own = [r for r in rs if r not in unlock]        # a state the variant is always in (devil form)
+            else:
+                continue
+            over[("cancel" if kind == "main" else "groupCancel", c["row"])] = own
+            # versus damage = the move this branch stands in for: what the same input at the same frame does without
+            # conditions (Akuma's story finish replaces 2L_n), else the move it is named after, else the source move
+            same = [ms.resolve(d["move_id"]) for k, d in cancels if d["command"] == c["command"] and max_damage(ms, i)
+                    and d["start"] == c["start"] and ms.requirements(d["req"]) in ([], [(0, 0)])]
+            same = [x for x in same if 0 <= x < n and x != t]
+            twin = same[0] if same else names.get(STORY_NAME.sub("", tn))
+            if twin is None or twin == t:
+                twin = i if c["command"] == 0 and c["start"] <= 1 else None
+            dt = max_damage(ms, t)
+            want = max_damage(ms, twin) if twin is not None else dt
+            if not 0 < want <= 100:                         # no attack to compare with (or an encoded value)
+                want = dt
+            if dt and want != dt and t not in damage:
+                damage[t] = want
+            note = f" -> {want} ({ms.move_name(twin)})" if dt and want != dt else ""
+            log(f"  {src} -> {tn} cmd {c['command']:#x} f{c['start']} "
+                f"req {over[('cancel' if kind == 'main' else 'groupCancel', c['row'])]} dmg {dt}{note}")
+    return over, damage
+
+
+def build(td: Tkdata, code: str, variant=None, log=print):
+    base = VARIANTS[code]["base"] if variant else code
+    mot = bytearray(td.mot(base))
+    arc = bytearray(td.read("mothead" + chr(92) + "mask" + chr(92) + base + "rotsm.arc"))
     common = bytearray(td.read("mothead" + chr(92) + "mask" + chr(92) + "common.arc"))
     ms = Moveset(bytes(mot))
+    req_over, dmg_over = plan_variant(ms, VARIANTS[code], log) if variant else ({}, {})
+    for mv, d in dmg_over.items():
+        for h in hit_rows(ms, mv):
+            r = ms.row("hitCondition", h)
+            if ms.u32(r + 8):
+                struct.pack_into("<I", mot, r + 8, d)
+    req_rows = sum(len(v) + 1 for v in req_over.values())
     n_moves = ms.count("move")
     std_idx = ms.resolve(0x8001)
     std_extra = ms.extra_props(std_idx)
@@ -132,7 +230,8 @@ def build(td: Tkdata, code: str):
     hc_new = align(wall_req + 16)
     can_new = align(hc_new + (n_hc + extra_hc) * 0x18)      # v5: one locked cancel row per entry move
     spin_new = align(can_new + len(ENTRY_LOCKS) * 0x28)      # v5: spin moves' own cancel lists
-    com_off = align(spin_new + spin_total * 0x28)
+    req_new = align(spin_new + spin_total * 0x28)            # variants: their own requirement lists
+    com_off = align(req_new + req_rows * 8)
     img = bytearray(align(com_off + len(common)))
     img[0:len(mot)] = mot
     img[arc_off:arc_off + len(arc)] = arc
@@ -217,6 +316,7 @@ def build(td: Tkdata, code: str):
             struct.pack_into("<i", img, r + 0x78, struct.unpack_from("<i", img, r + 0x30)[0] * 2)
         if not struct.unpack_from("<i", img, r + 0x7C)[0]:
             struct.pack_into("<i", img, r + 0x7C, struct.unpack_from("<i", img, r + 0x34)[0])
+    req_at = req_new
     for t in ("cancel", "groupCancel"):
         for i in range(tables[t][1]):
             c = row(t, i)
@@ -227,6 +327,9 @@ def build(td: Tkdata, code: str):
                 if cid == 881:
                     break
                 ids.append(cid); ri += 1
+            own = req_over.get((t, i))
+            if own is not None:
+                ids = [a for a, _ in own]
             cmd0 = q(c) == 0
             opt = 1 if cmd0 else 0
             if any(x >= 0x32C and not x & 0x8000 for x in ids): opt |= 2
@@ -243,6 +346,11 @@ def build(td: Tkdata, code: str):
             struct.pack_into("<H", img, c + 0x26, opt)
             ref(c + 0x08, "requirement")
             ref(c + 0x10, "cancelExtra")
+            if own is not None:
+                for k, (a, v) in enumerate(own + [(881, 0)]):
+                    struct.pack_into("<II", img, req_at + 8 * k, a, v)
+                ptr(c + 0x08, req_at)
+                req_at += 8 * (len(own) + 1)
     for i in range(tables["reactions"][1]):
         for k in range(7):
             ref(row("reactions", i) + 8 * k, "pushback")
@@ -354,11 +462,12 @@ def build(td: Tkdata, code: str):
     put(0x150 + T["hitCondition"] * 16, hc_new)
     struct.pack_into("<Q", img, 0x150 + T["hitCondition"] * 16 + 8, n_hc + extra_hc)
 
+    assert req_at == req_new + req_rows * 8
     ids = Counter(struct.unpack_from("<H", img, moves_new + i * 0xB0 + 0x5A)[0] for i in range(n_moves))
-    meta = dict(char_id=ids.most_common(1)[0][0], name=ms.name.strip("[]"), assault=special_ids[0], standing=std_idx,
+    meta = dict(char_id=ids.most_common(1)[0][0], name=VARIANTS[code]["name"] if variant else ms.name.strip("[]"), assault=special_ids[0], standing=std_idx,
                 eff_off=eff_offs[0], eff_rows=eff_rows, std_props=len(std_extra), com_off=com_off,
                 com_size=len(img) - com_off, ret=special_ids[1], ret_eff_off=eff_offs[1], assault_base=base_idx,
-                wall_req=wall_req if screw_lists else 0, wall_lists=len(screw_lists), spin_delayed=spin_delayed)
+                wall_req=wall_req if screw_lists else 0, wall_lists=len(screw_lists), spin_delayed=spin_delayed, variant=len(req_over))
     return img, sorted(set(relocs)), meta
 
 
@@ -398,6 +507,14 @@ def build_all(out_dir, codes, log=print):
             common_done = True
         log(f"{code} {meta['name']} id={meta['char_id']} size={meta['com_off'] // 1024}KB relocs={len(relocs)} "
             f"assault={meta['assault']} wallScrewLists={meta['wall_lists']} spinWallDelayed={meta['spin_delayed']}")
+    for code in VARIANTS:
+        if codes and VARIANTS[code]["base"] not in codes:
+            continue
+        detail = log if log is print else (lambda *a: None)     # the launcher counts one line per file
+        detail(f"{code}: story moves of {VARIANTS[code]['base']} battles {sorted(VARIANTS[code]['battles'])}")
+        img, relocs, meta = build(td, code, variant=True, log=detail)
+        write_blob(os.path.join(out_dir, code + ".t7p"), code, img, relocs, meta)
+        log(f"{code} {meta['name']} id={meta['char_id']} size={meta['com_off'] // 1024}KB branches={meta['variant']}")
     with open(os.path.join(out_dir, "version.txt"), "w") as f:
         f.write(str(VERSION))
 
