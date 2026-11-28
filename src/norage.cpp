@@ -102,6 +102,11 @@ int PatchMoveset(uintptr_t info) {
         return id < moves.count ? id : -1;
     };
     auto targetsRA = [&](uintptr_t c) {
+        // 11-27 boss versions: a Rage Art on a 3-button press is the boss's own move (used without rage), not the
+        // game's Rage Art entry (those are 2-button presses) - it stays
+        uint64_t cmd = 0; Rd(c, cmd);
+        uint32_t btn = (uint32_t)(cmd >> 32) & 0xF;
+        if ((cmd >> 32) && ((btn & 1) + (btn >> 1 & 1) + (btn >> 2 & 1) + (btn >> 3 & 1)) >= 3) return false;
         uint16_t mid = 0; Rd(c + 0x24, mid);
         int64_t t = resolve(mid);
         return t >= 0 && isRA[(size_t)t];

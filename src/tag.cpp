@@ -159,6 +159,8 @@ const wchar_t* BossName(int charId) {
     case 8: return L"최종전 헤이하치";
     case 9: return L"트루 데빌 카즈야";
     case 32: return L"스토리 고우키";
+    case 6: return L"트레저 진";
+    case 26: return L"보스 카즈미";
     default: return L"보스판";
     }
 }

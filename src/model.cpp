@@ -205,7 +205,8 @@ uintptr_t BossSet(int id) {
         cdo = ue::Find("TekkenBlueprintLibrary", "/Script/TekkenGame", "Default__TekkenBlueprintLibrary");
         setCls = ue::Find("Class", "/Script/TekkenGame", "CharacterItemSet");
     }
-    const wchar_t* name = id == 8 ? L"CS_HEI_final" : id == 9 ? L"CS_KAZ_final" : id == 32 ? L"CS_MRX_final" : nullptr;
+    const wchar_t* name = id == 8 ? L"CS_HEI_final" : id == 9 ? L"CS_KAZ_final" : id == 32 ? L"CS_MRX_final"
+        : id == 26 ? L"CS_BS7_def_c125" : nullptr;                 // 11-27 Kazumi: the ch.13 boss look; Jin: none
     if (!fn || !cdo || !setCls || !name) return 0;
     wchar_t path[200];
     swprintf_s(path, L"/Game/Demo/StoryMode/Character/Sets/%s.%s", name, name);

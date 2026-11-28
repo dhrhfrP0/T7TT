@@ -10,7 +10,7 @@ import zipfile
 import tkinter as tk
 from tkinter import messagebox, ttk
 
-VERSION = "0.1.1 테스트"
+VERSION = "0.2 테스트"
 FROZEN = getattr(sys, "frozen", False)
 HERE = os.path.dirname(os.path.abspath(sys.executable if FROZEN else __file__))
 BUNDLE = getattr(sys, "_MEIPASS", HERE)
@@ -134,7 +134,7 @@ def tag_data_ready(out_dir):
         sys.path.insert(0, TOOLS)
     import build_partner
     try:
-        ok = open(os.path.join(out_dir, "version.txt")).read().strip() == str(build_partner.VERSION)
+        ok = open(os.path.join(out_dir, "version.txt")).read().strip() == build_partner.STAMP
     except OSError:
         return False
     # 0.2: boss versions (hei_fb ...) are new files next to the characters: an older install builds again
